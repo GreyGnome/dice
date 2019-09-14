@@ -1,0 +1,1 @@
+/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/bin/avrdude -C/home/schwager/.arduino15/packages/arduino/tools/avrdude/6.3.0-arduino14/etc/avrdude.conf -v -patmega8 -cusbasp -Pusb -U lfuse:w:0xE1:m
