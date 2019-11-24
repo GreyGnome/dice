@@ -1,19 +1,51 @@
-// From: TrueRandomSeed.ino
-//   This example sketch shows how to provide a truly random seed value to the built in 
-//   library pseudo random number generator.  This ensures that your sketch will be
-//   using a different sequence of random numbers every time it runs.  Unlike the 
-//   usually suggested randomSeed(analogRead(0)) this method will provide a much more 
-//   uniform and varied seed value.  For more information about the basic technique used
-//   here to produce a random number or if you need more than one such number you can 
-//   find a library, Entropy from the following web site along with documentation of how
-//   the library has been tested to provide TRUE random numbers on a variety of AVR 
-//   chips and arduino environments. 
+/*
+      Copyright [2019] [Michael Anthony Schwager]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+   A copy of the license is also provided in a file alongside this source code
+   at https://github.com/GreyGnome/dice/tree/master/dice_atmega8
+ */
+/*
+ * The project is designed to run at 8 MHz. 1 MHz is the default from the factory.
+ * It will probably work, but has not been tested.
+ * Before programming, I must set the 8 MHz fuses. See the shell script that accompanies this source code.
+ */
+/*
+ I was inspired by this:
+ From: TrueRandomSeed.ino
+   "...Unlike the usually suggested randomSeed(analogRead(0)) this method will provide a much more 
+   uniform and varied seed value.  For more information about the basic technique used
+   here to produce a random number or if you need more than one such number you can 
+   find a library, Entropy from the following web site along with documentation of how
+   the library has been tested to provide TRUE random numbers on a variety of AVR 
+   chips and arduino environments."
+   https://sites.google.com/site/astudyofentropy/project-definition/timer-jitter-entropy-sources/entropy-library
+*/
+//   HOWEVER! The ATmega8a does not have the same watchdog timer which was used to create the entropy,
+//   so I came up with another method.
 //
-//   https://sites.google.com/site/astudyofentropy/project-definition/
-//           timer-jitter-entropy-sources/entropy-library
-//
-//   Copyright 2014 by Walter Anderson, wandrson01 at gmail dot com
-//
+//   This kit generates a random seed as follows: Inside the microcontroller
+//   is a counter that goes from 0 to 255 very quickly- it counts up 4000 times per second (this counter
+//   is used to generate interrupts for the PWM display of the LEDs). Picking an exact number manually
+//   would be almost impossible. So as soon as you press a “roll” or “flip” switch, the counter is read.
+//   This number is used as a seed. So now we’ll have one of 256 sequences of numbers- pretty good,
+//   but remember, it’s only 256. Can we do better? Yes. The very next time you press a button, the next
+//   counter number is read. The first byte is bit-shifted left, and added with this random number.
+//   So we get a seed that’s between 0 and 65535. Do this twice more, so that after 4 rolls of the dice,
+//   you'll have a seed that's 32 bits long.
+//   See the source website at https://github.com/GreyGnome/dice/tree/master/dice_atmega8
+//   for more information.
  
 //#include <EnableInterrupt.h>
 // Using vim: :set ts=2 sts=2 sw=2 et ff=unix
@@ -27,6 +59,8 @@
 #include <avr/interrupt.h>
 #include <avr/sleep.h>
 #include "digitalWriteFast.h"
+
+#undef DEBUG
 
 // === vvv RANDOM vvv ==================================================================
 // === vvv RANDOM vvv ==================================================================
@@ -43,16 +77,38 @@ volatile uint32_t seed;
 // value from TCNT2 and store it in EEPROM.
 // The very first time in this program's life, seed will start with the value
 // 255 because the EEPROM is filled with all 0xFF's.
+uint8_t seed_bytes_remaining=4;
 void populate_seed(void) {
-  seed = seed << 8;     // count=4, seed = 0,0,0,0
-                        // count=3, seed=0,0,TCNT2(4),0
-                        // count=2, seed=0,TCNT2(4),TCNT(3),0
-                        // count=1, seed=TCNT2(4),TCNT2(3),TCNT2(2),0
-  seed |= seed | TCNT2; // count=4, seed=0,0,0,TCNT2(4)
-                        // count=3, seed=0,0,TCNT2(4),TCNT2(3)
-                        // count=2, seed=0,TCNT2(4),TCNT2(3),TCNT2(2)
-                        // count=1, TCNT2(4),TCNT2(3),TCNT2(2),TCNT2(1)
+  seed = seed << 8;     // seed_bytes_remaining==4, seed = 0,0,0,0
+                        // seed_bytes_remaining==3, seed=0,0,TCNT2(4),0
+                        // seed_bytes_remaining==2, seed=0,TCNT2(4),TCNT(3),0
+                        // seed_bytes_remaining==1, seed=TCNT2(4),TCNT2(3),TCNT2(2),0
+  seed |= seed | TCNT2; // seed_bytes_remaining==4, seed=0,0,0,TCNT2(4)
+                        // seed_bytes_remaining==3, seed=0,0,TCNT2(4),TCNT2(3)
+                        // seed_bytes_remaining==2, seed=0,TCNT2(4),TCNT2(3),TCNT2(2)
+                        // seed_bytes_remaining==1, TCNT2(4),TCNT2(3),TCNT2(2),TCNT2(1)
 }
+
+uint8_t poweron_seed = 1; // we'll preload the seed with each of the first 4 rolls of the dice, once after power on.
+void prepare_seed() {
+  if (seed_bytes_remaining > 0) {
+    populate_seed();
+    seed_bytes_remaining--;
+    randomSeed(seed);
+  } else {
+    // Pre-populate a random seed for next time.
+    if (poweron_seed) {
+      //if (EEPROM.read(0) == 255)
+      seed=TCNT2;
+      EEPROM.write(0, seed);
+      poweron_seed=0;
+#ifdef DEBUG
+      show_seed();
+#endif
+    }
+  }
+}
+
 // === ^^^ RANDOM ^^^ ==================================================================
 // === ^^^ RANDOM ^^^ ==================================================================
 // === ^^^ RANDOM ^^^ ==================================================================
@@ -200,21 +256,24 @@ void heads(void) {
 void tails(void) {
   digitalWriteFast(HEADS, LOW); digitalWriteFast(TAILS, HIGH);
 }
-// This doesn't work. The LED with the lower forward voltage will light. The other won't
+// This doesn't work. The LEDs share a resistor, so only the one with the lower forward voltage
+// will light. The other won't.
 /*
 void heads_tails_on(void) {
   digitalWriteFast(HEADS, HIGH); digitalWriteFast(TAILS, HIGH);
 }
 */
 
+// Instead, do this. ...To fix it, we toggle between them quickly.
 void heads_tails_1_sec(void) {
   uint8_t i;
-  for (i=0; i < 20; i++) {
+  for (i=0; i < 100; i++) {
     digitalWriteFast(HEADS, HIGH); digitalWriteFast(TAILS, LOW);
-    delay(50);
+    delay(5);
     digitalWriteFast(HEADS, LOW); digitalWriteFast(TAILS, HIGH);
-    delay(50);
+    delay(5);
   }
+  digitalWriteFast(TAILS, LOW);
 }
 
 void heads_tails_off(void) {
@@ -222,6 +281,8 @@ void heads_tails_off(void) {
 }
 
 // NOTE: pinModeFast does not appear to be working at the moment (8/2019).
+// I think it's because we're using a couple of pins that in a regular Arduino are
+// not available.
 // Just use this for now.
 void set_pin_directions() {
   pinMode(ROLL, INPUT_PULLUP);
@@ -238,7 +299,7 @@ void set_all_pins_input() {
 }
 
 // blink the number 4, then show the value of the lowest byte of the seed
-// bit by bit, starting with the leftmost bit, by displaying an led
+// bit by bit, starting with the leftmost bit, by displaying the led
 // between led's 2 and 6.
 void show_seed() {
   uint8_t lowest_byte = seed & 0x000000FF;
@@ -257,6 +318,7 @@ void show_seed() {
     if (i == 0) break;
     i--;
   }
+  dieOff();
 }
 
 volatile uint8_t intr_counter = 0; // Currently unused.
@@ -286,25 +348,6 @@ void go_to_sleep() {
   set_pin_directions();
 }
 
-uint8_t seed_bytes_remaining=4;
-uint8_t poweron_seed = 1; // we'll preload the seed with each of the first 4 rolls of the dice, once after power on.
-void prepare_seed() {
-  if (seed_bytes_remaining > 0) {
-    populate_seed();
-    seed_bytes_remaining--;
-    randomSeed(seed);
-  } else {
-    // Pre-populate a random seed for next time.
-    if (poweron_seed) {
-      //if (EEPROM.read(0) == 255)
-      seed=TCNT2;
-      EEPROM.write(0, seed);
-      poweron_seed=0;
-      show_seed();
-    }
-  }
-}
-
 //
 // USBasp Connection
 //
@@ -318,7 +361,6 @@ void setup()
   TCCR2 = 0;
   TCCR2 |= (0 << COM20); // SHUT OFF OUTPUT PIN
   TCCR2 |= (1 << WGM21 | 1 << WGM20);  /* Fast PWM mode */
-  //TIMSK |= (1 << OCIE2); /* enable timer2 output compare match interrupt */
   TIMSK |= (1 << TOIE2); /* enable timer2 overflow interrupt */
   TCCR2 = (1 << CS20);   // No prescaler 
   TIFR |= (1 << TOV2);    /* clear interrupt flag */
@@ -326,21 +368,19 @@ void setup()
   // Get ready for sleep
   ADCSRA &= ~(1<<ADEN); // Disable ADC for better power consumption
 
+#ifdef DEBUG
   pinModeFast(INTR_TOGGLE, OUTPUT); // For testing.
+#endif
   set_pin_directions();
   dieAll();             // self-check of the system
-  heads_tails_1_sec();	// ditto, but they share a resistor so only the lowest-forward-voltage LED will go on.
+  heads_tails_1_sec();	// ditto
   dieOff();
   show_seed();      // self-check of the system
-  dieOff();
-  heads_tails_off();
 
-  //DDRD &= ~(1 << DDD2); // Clear the PD2 pin
-  //PORTD |= (1 << PORTD2);
-  //MCUCR &= 0xF0;
-  //GICR |=(1<<INT0 | 1 << INT1);
+#ifdef DEBUG
   attachInterrupt(digitalPinToInterrupt(ROLL), roll_interrupt, LOW);
   attachInterrupt(digitalPinToInterrupt(FLIP), flip_interrupt, LOW);
+#endif
   current_millis=millis();
 }
  
@@ -398,7 +438,7 @@ void loop()
     dieOff();
     current_millis = millis();
     // show the heads/tails LEDs while holding down the flip button
-    if (last_flip) == 0 { heads(); last_flip=1; } else { tails(); last_flip=0;}
+    if (last_flip == 0) { heads(); last_flip=1; } else { tails(); last_flip=0;}
     delay_interval=DELAY_INTERVAL;
     delay(50);
     return;
