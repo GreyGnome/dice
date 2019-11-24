@@ -377,10 +377,8 @@ void setup()
   dieOff();
   show_seed();      // self-check of the system
 
-#ifdef DEBUG
   attachInterrupt(digitalPinToInterrupt(ROLL), roll_interrupt, LOW);
   attachInterrupt(digitalPinToInterrupt(FLIP), flip_interrupt, LOW);
-#endif
   current_millis=millis();
 }
  
